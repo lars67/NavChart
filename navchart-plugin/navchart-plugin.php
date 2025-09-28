@@ -3,7 +3,7 @@
  * Plugin Name: NavChart
  * Plugin URI: https://example.com/navchart
  * Description: Displays navigation performance data from Excel as an interactive line chart using Apache ECharts.
- * Version: 1.2.0
+ * Version: 1.3.0
  * Author: Your Name
  * Author URI: https://example.com
  * License: GPL v2 or later
@@ -18,19 +18,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Define plugin constants.
-define( 'NAVCHART_VERSION', '1.2.0' );
+define( 'NAVCHART_VERSION', '1.3.0-' . time() ); // Cache-busting version
 define( 'NAVCHART_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'NAVCHART_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'NAVCHART_TEXTDOMAIN', 'navchart' );
 
-// Require Composer autoload.
+// Composer autoload is optional for this version
 if ( file_exists( NAVCHART_PLUGIN_DIR . 'vendor/autoload.php' ) ) {
     require_once NAVCHART_PLUGIN_DIR . 'vendor/autoload.php';
-} else {
-    add_action( 'admin_notices', function() {
-        echo '<div class="notice notice-error"><p>' . esc_html__( 'NavChart requires Composer dependencies. Please run composer install.', 'navchart' ) . '</p></div>';
-    } );
-    return;
 }
 
 // Activation hook.
@@ -57,9 +52,9 @@ function navchart_init() {
     load_plugin_textdomain( NAVCHART_TEXTDOMAIN, false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
 
     require_once NAVCHART_PLUGIN_DIR . 'includes/class-cache.php';
-    require_once NAVCHART_PLUGIN_DIR . 'includes/simple-excel-parser.php';
-    require_once NAVCHART_PLUGIN_DIR . 'includes/ajax-handler.php';
-    require_once NAVCHART_PLUGIN_DIR . 'admin/Admin.php';
+    require_once NAVCHART_PLUGIN_DIR . 'simple-excel-parser.php';
+    require_once NAVCHART_PLUGIN_DIR . 'ajax-handler.php';
+    require_once NAVCHART_PLUGIN_DIR . 'admin/class-admin.php';
 
     // Set default Excel path if not configured.
     $options = get_option( 'navchart_options', [] );
@@ -86,7 +81,7 @@ function navchart_enqueue_assets() {
     // ECharts from CDN.
     wp_enqueue_script( 'echarts', 'https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js', [], '5.4.3', true );
 
-    // Custom JS.
+    // Custom JS with cache-busting version.
     wp_enqueue_script( 'navchart-js', NAVCHART_PLUGIN_URL . 'assets/js/navchart.js', [ 'jquery', 'echarts' ], NAVCHART_VERSION, true );
 
     // Localize script for AJAX.
@@ -103,41 +98,38 @@ function navchart_enqueue_assets() {
 add_shortcode( 'navchart', 'navchart_shortcode' );
 function navchart_shortcode( $atts ) {
     $atts = shortcode_atts( [
-        'days_back' => 9999,
-        'smoothing' => 'none',
+        'id'        => 'navchart-' . wp_rand( 1000, 9999 ),
         'animation' => 'true',
     ], $atts, 'navchart' );
 
-    // Get options.
+    $chart_id = sanitize_html_class( $atts['id'] );
     $options = get_option( 'navchart_options', [] );
-    $excel_path = $options['excel_path'] ?? '';
 
-    error_log( 'NavChart Shortcode: Options loaded, Excel path: ' . $excel_path );
-
-    if ( empty( $excel_path ) ) {
-        $default_path = NAVCHART_PLUGIN_DIR . 'RoboNav.xlsx';
-        if ( file_exists( $default_path ) ) {
-            $excel_path = $default_path;
-            error_log( 'NavChart Shortcode: Using default Excel path: ' . $default_path );
-        } else {
-            error_log( 'NavChart Shortcode: No Excel path configured and default not found.' );
-            return '<p>' . esc_html__( 'No Excel file configured. Please set in settings.', 'navchart' ) . '</p>';
-        }
+    // Determine date range based on admin settings
+    $range_type = $options['range_type'] ?? 'recent';
+    
+    if ( $range_type === 'custom' ) {
+        $start_date = $options['start_date'] ?? '';
+        $end_date = $options['end_date'] ?? '';
+        $days_back = null;
+    } else {
+        $days_back = intval( $options['days_back'] ?? 365 );
+        $start_date = '';
+        $end_date = '';
     }
 
-    if ( ! file_exists( $excel_path ) ) {
-        error_log( 'NavChart Shortcode: Excel file does not exist at path: ' . $excel_path );
-        return '<p>' . esc_html__( 'Excel file not found. Check the path in settings.', 'navchart' ) . '</p>';
-    }
-
-    // Output chart div with data attributes.
-    $chart_id = 'navchart-' . uniqid();
-    $settings_json = json_encode( [
-        'title'     => $options['title'] ?? 'Robofunds Global A/S',
-        'y_label'   => $options['y_label'] ?? 'FinalNav',
-        'smoothing' => sanitize_text_field( $atts['smoothing'] ),
+    $settings_json = wp_json_encode( [
+        'chartId'   => $chart_id,
+        'excelPath' => $options['excel_path'] ?? '',
+        'title'     => $options['title'] ?? 'Nav Performance',
+        'yLabel'    => $options['y_label'] ?? 'FinalNav',
+        'smoothing' => $options['smoothing'] ?? 'none',
+        'smoothing_factor' => intval( $options['smoothing_factor'] ?? 3 ),
         'animation' => sanitize_text_field( $atts['animation'] ),
-        'days_back' => intval( $atts['days_back'] ),
+        'use_custom_range' => $range_type === 'custom',
+        'days_back' => $days_back,
+        'start_date' => $start_date,
+        'end_date'   => $end_date,
         'height'    => intval( $options['height'] ?? 400 ),
         'yMin'      => intval( $options['y_min'] ?? 90000 ),
         'yMax'      => intval( $options['y_max'] ?? 140000 ),
@@ -152,17 +144,6 @@ function navchart_shortcode( $atts ) {
         esc_attr( $settings_json ),
         $height
     );
-}
-
-// AJAX handler - ONLY use real Excel data, NO fallback
-add_action( 'wp_ajax_navchart_data', 'navchart_ajax_get_data' );
-add_action( 'wp_ajax_nopriv_navchart_data', 'navchart_ajax_get_data' );
-function navchart_ajax_get_data() {
-    // Load the AJAX handler that reads real Excel data
-    require_once NAVCHART_PLUGIN_DIR . 'includes/ajax-handler.php';
-    
-    // Call the real AJAX handler function with correct namespace
-    \NavChart\navchart_ajax_get_data();
 }
 
 // Cron hook for refresh (stub).
