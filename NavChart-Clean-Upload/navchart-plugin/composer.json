@@ -1,0 +1,22 @@
+{
+    "name": "navchart/plugin",
+    "description": "NavChart WordPress Plugin for Excel-based line charts with ECharts",
+    "type": "wordpress-plugin",
+    "require": {
+        "phpoffice/phpspreadsheet": "1.18.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "NavChart\\": "includes/",
+            "NavChart\\Admin\\": "admin/"
+        }
+    },
+    "config": {
+        "platform-check": false
+    },
+    "platform": {
+        "php": "7.4.0"
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
